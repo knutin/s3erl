@@ -65,7 +65,7 @@ handle_call({request, Req}, From, #state{config = C} = State)
         spawn_link(fun() ->
                            gen_server:reply(From, handle_request(Req, C))
                    end),
-    NewState = State#state{workers = [WorkerPid | State#state.workers],
+    NewState = State#state{workers = [{WorkerPid, From} | State#state.workers],
                            counters = update_counters(Req, State#state.counters)},
     {noreply, NewState};
 
@@ -97,12 +97,17 @@ handle_call(get_config, _From, #state{config = C} = State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', Pid, _}, State) ->
-    %% TODO: Keep track of From references in workers list so we can
-    %% reply to our caller
-    case lists:member(Pid, State#state.workers) of
-        true ->
-            NewWorkers = lists:delete(Pid, State#state.workers),
+handle_info({'EXIT', Pid, Reason}, State) ->
+    case lists:keysearch(Pid, 1, State#state.workers) of
+        {value, {Pid, From}} ->
+            case Reason of
+                normal ->
+                    ok;
+                _ ->
+                    error_logger:info_msg("s3 worker exit because ~p~n", [Reason]),
+                    gen_server:reply(From, {worker_exit, Reason})
+            end,
+            NewWorkers = lists:keydelete(Pid, 1, State#state.workers),
             {noreply, State#state{workers = NewWorkers}};
         false ->
             error_logger:info_msg("ignored down message~n"),

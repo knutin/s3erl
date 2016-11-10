@@ -104,7 +104,9 @@ handle_info({'EXIT', Pid, Reason}, State) ->
                 normal ->
                     ok;
                 _ ->
-                    error_logger:info_msg("s3 worker exit because ~p~n", [Reason]),
+                    error_logger:info_msg(
+                      "s3 worker ~p exit because ~p. sending reply to ~p~n",
+                      [Pid, Reason, From]),
                     gen_server:reply(From, {worker_exit, Reason})
             end,
             NewWorkers = lists:keydelete(Pid, 1, State#state.workers),

@@ -170,7 +170,8 @@ handle_request(Req, C, StartTs, Attempts) ->
         {error, Reason} when Attempts < C#config.max_retries andalso
                              (Reason =:= connect_timeout orelse
                               Reason =:= connection_closed orelse
-                              Reason =:= timeout) ->
+                              Reason =:= timeout orelse
+                              Reason =:= bad_digest) ->
             catch (C#config.retry_callback)(Reason, Attempts),
             timer:sleep(C#config.retry_delay),
             handle_request(Req, C, StartTs, Attempts + 1);

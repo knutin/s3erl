@@ -161,24 +161,25 @@ create_config(Config) ->
 
 %% @doc: Executes the given request, will retry if request failed
 handle_request(Req, C) ->
-    handle_request(Req, C, 0).
+    StartTs = os:timestamp(),
+    handle_request(Req, C, StartTs, 0).
 
-handle_request(Req, C, Attempts) ->
-    Start = os:timestamp(),
+handle_request(Req, C, StartTs, Attempts) ->
     case catch execute_request(Req, C) of
         %% Continue trying if we have connection related errors
         {error, Reason} when Attempts < C#config.max_retries andalso
                              (Reason =:= connect_timeout orelse
                               Reason =:= connection_closed orelse
-                              Reason =:= timeout) ->
+                              Reason =:= timeout orelse
+                              Reason =:= bad_digest) ->
             catch (C#config.retry_callback)(Reason, Attempts),
             timer:sleep(C#config.retry_delay),
-            handle_request(Req, C, Attempts + 1);
+            handle_request(Req, C, StartTs, Attempts + 1);
 
         {'EXIT', {econnrefused, _}} when Attempts < C#config.max_retries ->
             catch (C#config.retry_callback)(econnrefused, Attempts),
             timer:sleep(C#config.retry_delay),
-            handle_request(Req, C, Attempts + 1);
+            handle_request(Req, C, StartTs, Attempts + 1);
 
         {error, Error} when Attempts < C#config.max_retries ->
             Retry = case Error of
@@ -191,17 +192,17 @@ handle_request(Req, C, Attempts) ->
                 true ->
                     catch (C#config.retry_callback)(internal_error, Attempts),
                     timer:sleep(C#config.retry_delay),
-                    handle_request(Req, C, Attempts + 1);
+                    handle_request(Req, C, StartTs, Attempts + 1);
                 false ->
-                    End = os:timestamp(),
+                    EndTs = os:timestamp(),
                     catch (C#config.post_request_cb)(Req, {error, Error},
-                                                     timer:now_diff(End, Start)),
+                                                     timer:now_diff(EndTs, StartTs)),
                     {error, Error}
             end;
 
         Res ->
-            End = os:timestamp(),
-            catch (C#config.post_request_cb)(Req, Res, timer:now_diff(End, Start)),
+            EndTs = os:timestamp(),
+            catch (C#config.post_request_cb)(Req, Res, timer:now_diff(EndTs, StartTs)),
             Res
     end.
 

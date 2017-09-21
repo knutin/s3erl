@@ -20,9 +20,12 @@ get(Config, Bucket, Key, Headers) ->
     do_get(Config, Bucket, Key, Headers).
 
 -spec put(#config{}, bucket(), key(), body(), contenttype(), [header()]) ->
-                 {ok, etag()} | {error, any()}.
+    {ok, etag()} | {error, any()}.
 put(Config, Bucket, Key, Value, ContentType, Headers) ->
-    NewHeaders = [{"Content-Type", ContentType}|Headers],
+    MD5 = md5_hash_string(Value),
+    NewHeaders = [{"Content-Type", ContentType},
+                  {"Content-MD5", MD5}
+                  | Headers],
     do_put(Config, Bucket, Key, Value, NewHeaders).
 
 delete(Config, Bucket, Key) ->
@@ -123,9 +126,14 @@ build_full_url(Endpoint, Bucket, Path) ->
 request(Config, Method, Bucket, Path, Headers, Body) ->
     Date = httpd_util:rfc1123_date(),
     Url = build_url(Config#config.endpoint, Bucket, Path),
-
+    ContentMD5 = case lists:keyfind("Content-MD5", 1, Headers) of
+                     {_, MD5} ->
+                         MD5;
+                     false ->
+                         ""
+                 end,
     Signature = sign(Config#config.secret_access_key,
-                     stringToSign(Method, "",
+                     stringToSign(Method, ContentMD5,
                                   Date, Bucket, Path, Headers)),
 
     Auth = ["AWS ", Config#config.access_key, ":", Signature],
@@ -135,7 +143,6 @@ request(Config, Method, Bucket, Path, Headers, Body) ->
                    {"Connection", "keep-alive"}
                    | Headers],
     Options = [{max_connections, Config#config.max_concurrency}],
-
     do_request(Url, Method, FullHeaders, Body, Config#config.timeout, Options).
 
 do_request(Url, Method, Headers, Body, Timeout, Options) ->
@@ -151,12 +158,20 @@ do_request(Url, Method, Headers, Body, Timeout, Options) ->
             {ok, not_found};
         {ok, {Code, _ResponseHeaders, <<>>}} ->
             {error, Code};
-        {ok, {_Code, _ResponseHeaders, ResponseBody}} ->
-            {error, parseErrorXml(ResponseBody)};
+        {ok, {_Code, _ResponseHeaders, _ResponseBody} = ErrorResp} ->
+            handle_error_response(ErrorResp);
         {error, Reason} ->
             {error, Reason}
     end.
 
+handle_error_response({Code, _ResponseHeaders, ResponseBody}) ->
+    {ErrText, Explanation} = parseErrorXml(ResponseBody),
+    case {Code, ErrText} of
+        {{400, _}, "BadDigest"} ->
+            {error, bad_digest};
+        _ ->
+            {error, {ErrText, Explanation}}
+    end.
 
 parseErrorXml(Xml) ->
     {XmlDoc, _Rest} = xmerl_scan:string(binary_to_list(Xml)),
@@ -221,3 +236,10 @@ stringToSign(Verb, ContentMD5, Date, Bucket, Path, OriginalHeaders) ->
 
 sign(Key,Data) ->
     base64:encode(crypto:hmac(sha, Key, lists:flatten(Data))).
+
+%%
+%% MD5
+%%
+
+md5_hash_string(Data) ->
+    base64:encode_to_string(erlang:md5(Data)).
